@@ -12,6 +12,16 @@ Extensions such as password managers, messaging apps, and crypto wallets handle 
 
 Users understandably prefer not to type this, so in desktop applications, a common pattern is to store the decryption key in a system store (like macOS keychain). The system can be told to [only reveal the secret after biometrics have been provided](https://developer.apple.com/documentation/security/keychain_services/keychain_items/restricting_keychain_item_accessibility?language=objc#2974973), meaning the application can request the secret but access is only granted if the user that stored it is physically present. This pattern is good for users but currently only possible in extensions by communicating with a native application over [Native Messaging](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Native_messaging). This is because access to both hardware based key stores and biometrics are not exposed by existing web APIs.
 
+## Use Cases
+
+### Use Case 1
+
+Storing data behind biometrics, for example a password manager which wishes to store a private encryption key. Biometrics would be required before the private key is released by the browser to the extension.
+
+### Use Case 2
+
+An extension wishes to store data in a more secure location than localStorage, but doesn't require authentication before access.
+
 ## Proposal
 
 We propose a new browser.secureStorage API that would use platform-dependent APIs for storing sensitive data:
@@ -21,96 +31,148 @@ We propose a new browser.secureStorage API that would use platform-dependent API
 - Android: [Keystore](https://source.android.com/security/keystore)
 - Linux: See FAQ
 
-A mock for this proposal is available [here](secure-storage-mock.js).
+### Permissions
+
+This API is behind the "secureStorage" permission. It is recommended that browsers allow extensions to add this permission without prompting users, encouraging adoption of the API.
+
+### Example Usage
+
+#### Checking for biometrics
+
+```js
+const { supportedAuthenticationLevels } = await browser.secureStorage.getInfo();
+
+if (!supportedAuthenticationLevels.includes("BIOMETRIC")) {
+  console.warn("Biometrics are not supported on this device");
+}
+```
+
+#### Storing and retrieving a string
+
+```js
+// Store an API key
+await browser.secureStorage.set({
+  id: "API_KEY",
+  minimumAuthenticationLevel: "BIOMETRIC",
+  data: "ABC-DEF-GHI"
+});
+
+// Later, retrieve the same key (user authenticates with biometrics)...
+try {
+  const key = await browser.secureStorage.get({ id: "API_KEY" });
+} catch {
+  throw new Error("Unable to retrieve API key.");
+}
+```
+
+#### Checking for a value
+
+```js
+const hasKey = await browser.secureStorage.has({ id: "API_KEY" });
+
+let key;
+
+if (hasKey) {
+  key = await browser.secureStorage.get({ id: "API_KEY" });
+} else {
+  key = window.prompt("Enter your API key:");
+  await browser.secureStorage.set({
+    id: "API_KEY",
+    minimumAuthenticationLevel: "BIOMETRIC",
+    data: key
+  });
+}
+
+// Do something with the key...
+```
 
 ### API
 
 **browser.secureStorage.getInfo**
 
-First, the getInfo function allows you to determine what implementation you are using. This is useful if you trust one implementation but not another. It also tells you which methods of authentication are available to protect the secret.
+Returns information about the available types of authentication.
 
 Request:
 
-```
+```js
 browser.secureStorage.getInfo();
 ```
 
 Response:
 
-```
+```json
 {
-  type: "MACOS_KEYCHAIN",
-  supportedAuthenticationLevels: [
-    {
-      name: "BIOMETRIC",
-      implementation: [
-        "MACOS_KEYCHAIN_FACE",
-        "MACOS_KEYCHAIN_TOUCHID"
-      ]
-    },
-    {
-      name: "DEVICE_CREDENTIAL",
-      implementation: [
-        "MACOS_ACCOUNT_PASSWORD"
-      ]
-    }
-  ]
+  "supportedAuthenticationLevels": ["BIOMETRIC", "DEVICE_CREDENTIAL", "ANY"]
 }
 ```
 
-Name can be either `BIOMETRIC` or `DEVICE_CREDENTIAL`, indicating which authentication levels are supported for a `browser.secureStorage.store` call. These are intentionally vague descriptors that allow the API to be used with some level of abstraction away from the hardware.
 
-Implementation is an array of browser-specific descriptors that a developer can use to learn more about what specific implementations the browser will use. These are not standardised and therefore are not used elsewhere in the API. They simply exist so the developer can get a better idea about what will be used if they request a secret to be stored with a particular authentication level.
+
+The three supported levels are `BIOMETRIC`, `DEVICE_CREDENTIAL`, and `ANY`. These are intentionally vague descriptors that allow the API to be used with some level of abstraction away from the hardware. This is a similar approach to the one used by Android: [BiometricManager.Authenticators](https://developer.android.com/reference/androidx/biometric/BiometricManager.Authenticators).
 
 On platforms like Windows, where the OS provides an API like Windows Hello but does not allow specific methods to be requested, the response will look as follows:
 
-```
+```json
 {
-  type: "WINDOWS_HELLO",
-  supportedAuthenticationLevels: [
-    {
-      name: "ANY",
-      implementation: []
-    }
-  ]
+  "supportedAuthenticationLevels": ["ANY"]
 }
 ```
 
-In this case, a call to `browser.secureStorage.store` must set the `minimumAuthenticationLevel` to `ANY`. This indicates that the developer is willing to use whatever authentication method is picked by the OS.
+In this case, a call to `browser.secureStorage.set` which sets `minimumAuthenticationLevel` must use the value `ANY`. This indicates that the developer is willing to use whatever authentication method is picked by the OS.
 
-**browser.secureStorage.store**
+Each level is a superset of the last. For example, if `DEVICE_CREDENTIAL` is specified as the minimum authentication level, the browser may still choose to present a biometrics prompt.
+
+**browser.secureStorage.set**
 
 This stores the provided string. The minimumAuthenticationLevel key indicates the minimum level of authentication that should be required when this secret is retrieved in the future.
 
-```
-browser.secureStorage.store({
+```js
+browser.secureStorage.set({
   id: "example-data"
   minimumAuthenticationLevel: "BIOMETRIC",
   data: JSON.stringify({ password: "!72AH8d_.-*gFgNFPUFz2" })
 });
 ```
 
-The authentication array is optional. If omitted, the secret is available without the need for any of the recognised auth methods but is still stored in the hardware backed location.
+The `minimumAuthenticationLevel` property is optional. If omitted, the secret is available without the need for any of the recognised auth methods but is still stored in the hardware backed location.
 
-**browser.secureStorage.retrieve**
+**browser.secureStorage.has**
+
+Checks to see if the given key is present in secure storage.
+
+Request:
+
+```js
+browser.secureStorage.has({ id: "example-data" });
+```
+
+Response:
+
+```json
+{
+  "exists": true,
+  "minimumAuthenticationLevel": "BIOMETRIC"
+}
+```
+
+`minimumAuthenticationLevel` is the minimum authentication level specified when storing the data.
+
+**browser.secureStorage.get**
 
 This retrieves the stored data. The browser will only provide it if the user authenticates with one of the allowed mechanisms for this secret, and will throw an error otherwise.
 
 Request:
 
-```
-browser.secureStorage.retrieve({ id: "example-data" });
+```js
+browser.secureStorage.get({ id: "example-data" });
 ```
 
 Response:
 
-```
+```json
 {
-  data: "",
-  authentication: {
-    level: "BIOMETRIC",
-    implementation: "MACOS_KEYCHAIN_FACE"
-  }
+  "data": "!72AH8d_.-*gFgNFPUFz2",
+  "authenticationLevel": "BIOMETRIC"
 }
 ```
 
@@ -120,9 +182,17 @@ The response includes both the requested data, and the type of authentication th
 
 Removes an entry from secureStorage given an ID. No biometrics are required.
 
-```
+```js
 browser.secureStorage.remove({ id: "example-data" });
 ```
+
+A mock for this proposal is available [here](secure-storage-mock.js).
+
+## Implementation Guidance
+
+This proposal intentionally avoids specifying implementation details, as what is considered secure is likely to change over time. However, it is expected that there will be general consensus around which OS level APIs are used to store data on each platform and what guarentees that provides.
+
+This section is left as a placeholder with the hope that browsers will update it as they begin implementation.
 
 ## FAQ
 
