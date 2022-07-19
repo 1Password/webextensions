@@ -88,7 +88,19 @@ if (hasKey) {
 
 ### API
 
-**browser.secureStorage.getInfo**
+#### browser.secureStorage.set
+
+This stores the provided string. The minimumAuthenticationLevel key indicates the minimum level of authentication that should be required when this secret is retrieved in the future.
+
+```js
+browser.secureStorage.set({
+  id: "example-data"
+  minimumAuthenticationLevel: "BIOMETRIC",
+  data: JSON.stringify({ password: "!72AH8d_.-*gFgNFPUFz2" })
+});
+```
+
+#### browser.secureStorage.getInfo
 
 Returns information about the available types of authentication.
 
@@ -102,39 +114,27 @@ Response:
 
 ```json
 {
-  "supportedAuthenticationLevels": ["BIOMETRIC", "DEVICE_CREDENTIAL", "ANY"]
+  "supportedAuthenticationLevels": ["BIOMETRIC", "DEVICE_CREDENTIAL", "NONE"]
 }
 ```
 
+##### Supported Levels
 
+The three supported levels are `BIOMETRIC`, `DEVICE_CREDENTIAL`, and `NONE`. These are intentionally vague descriptors that allow the API to be used with some level of abstraction away from the hardware. This is a similar approach to the one used by Android: [BiometricManager.Authenticators](https://developer.android.com/reference/androidx/biometric/BiometricManager.Authenticators).
 
-The three supported levels are `BIOMETRIC`, `DEVICE_CREDENTIAL`, and `ANY`. These are intentionally vague descriptors that allow the API to be used with some level of abstraction away from the hardware. This is a similar approach to the one used by Android: [BiometricManager.Authenticators](https://developer.android.com/reference/androidx/biometric/BiometricManager.Authenticators).
+###### Biometric
 
-On platforms like Windows, where the OS provides an API like Windows Hello but does not allow specific methods to be requested, the response will look as follows:
+This level includes any type of biometric, such as fingerprint or face based authentication.
 
-```json
-{
-  "supportedAuthenticationLevels": ["ANY"]
-}
-```
+###### Device Credential
 
-In this case, a call to `browser.secureStorage.set` which sets `minimumAuthenticationLevel` must use the value `ANY`. This indicates that the developer is willing to use whatever authentication method is picked by the OS.
+This includes prompting for the system password or a user specified PIN, as well as systems like Windows Hello where there is no control over the selected authentication method. 
 
-Each level is a superset of the last. For example, if `DEVICE_CREDENTIAL` is specified as the minimum authentication level, the browser may still choose to present a biometrics prompt.
+It is inclusive of the biometric level, meaning a browser may choose to use biometric authentication even if device credential has been specified as the minimum authentication level.
 
-**browser.secureStorage.set**
+###### None
 
-This stores the provided string. The minimumAuthenticationLevel key indicates the minimum level of authentication that should be required when this secret is retrieved in the future.
-
-```js
-browser.secureStorage.set({
-  id: "example-data"
-  minimumAuthenticationLevel: "BIOMETRIC",
-  data: JSON.stringify({ password: "!72AH8d_.-*gFgNFPUFz2" })
-});
-```
-
-The `minimumAuthenticationLevel` property is optional. If omitted, the secret is available without the need for any of the recognised auth methods but is still stored in the hardware backed location.
+A special level used when the developer wants to access data without user interaction. The secure storage location is used but the browser always returns the data without authentication.
 
 **browser.secureStorage.has**
 
